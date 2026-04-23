@@ -4,6 +4,43 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <title>HR Career Run · Mike Pritula Academy</title>
+
+<!-- SEO -->
+<meta name="description" content="Пройди карьерный путь HR от ассистента до CHRO. Браузерная игра от Mike Pritula Academy: 6 уровней, компетенции, боссы, MIKE-mode.">
+<meta name="keywords" content="HR игра, карьера HR, CHRO, HR Business Partner, Mike Pritula, HR Academy, HR обучение">
+<meta name="author" content="Mike Pritula Academy">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://game.pritula.academy/">
+
+<!-- Open Graph (Facebook, LinkedIn, Telegram) -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://game.pritula.academy/">
+<meta property="og:title" content="HR Career Run — от Junior до CHRO">
+<meta property="og:description" content="Браузерная игра: пройди карьерный путь HR за 6 уровней. Собирай компетенции, избегай burnout, побеждай боссов.">
+<meta property="og:image" content="https://game.pritula.academy/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:site_name" content="Mike Pritula Academy">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="HR Career Run — от Junior до CHRO">
+<meta name="twitter:description" content="Пройди карьеру HR за 6 уровней. Играй в браузере.">
+<meta name="twitter:image" content="https://game.pritula.academy/og-image.png">
+
+<!-- Favicon — inline SVG, не требует отдельного файла -->
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23140828'/%3E%3Cpath d='M16 6 L18 12 L24 12 L19 16 L21 22 L16 18 L11 22 L13 16 L8 12 L14 12 Z' fill='%23ff2d95'/%3E%3C/svg%3E">
+
+<!-- Google Analytics 4 — ЗАМЕНИ G-XXXXXXXXXX на свой Measurement ID -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-XXXXXXXXXX"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-XXXXXXXXXX');
+</script>
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
@@ -293,6 +330,23 @@
   .orbit:nth-child(2)::before{background:var(--neon-orange);box-shadow:0 0 12px var(--neon-orange)}
   @keyframes orbitSpin{to{transform:translate(-50%,-50%) rotate(360deg)}}
 
+  /* MUTE BUTTON */
+  .mute-btn{
+    position:fixed;top:18px;right:18px;z-index:60;
+    width:44px;height:44px;
+    background:var(--panel);border:2px solid var(--neon-cyan);
+    color:var(--neon-cyan);font-size:18px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    backdrop-filter:blur(8px);border-radius:10px;
+    box-shadow:0 0 15px rgba(0,240,255,.3);
+    transition:all .15s ease;
+    font-family:inherit;
+  }
+  .mute-btn:hover{transform:scale(1.08);box-shadow:0 0 25px var(--neon-cyan)}
+  .mute-btn:active{transform:scale(.95)}
+  .mute-btn.muted{border-color:var(--ink-dim);color:var(--ink-dim);box-shadow:none}
+  .mute-btn.muted:hover{box-shadow:0 0 10px var(--ink-dim)}
+
 </style>
 </head>
 <body>
@@ -330,6 +384,11 @@
 <div id="game-wrap">
   <canvas id="canvas" width="960" height="540"></canvas>
 </div>
+
+<!-- MUTE BUTTON (always visible) -->
+<button id="mute-btn" class="mute-btn" title="Mute / Unmute (M)">
+  <span id="mute-icon">🔊</span>
+</button>
 
 <!-- HUD -->
 <div id="hud">
@@ -532,6 +591,310 @@ const LEVELS = [
     nextRole: null
   }
 ];
+
+// ==================================================================
+// ANALYTICS — GA4 custom events (safe-fails if gtag not loaded)
+// ==================================================================
+function track(eventName, params){
+  try {
+    if(typeof gtag === 'function'){
+      gtag('event', eventName, params || {});
+    }
+  } catch(e){ /* ignore */ }
+}
+
+// ==================================================================
+// 8-BIT AUDIO ENGINE (Web Audio API — no external files)
+// ==================================================================
+// Procedurally generates NES-style sound using oscillators.
+// Uses square/triangle/sawtooth waves with ADSR envelopes.
+// Music is a pattern-based sequencer running on interval.
+// ==================================================================
+const Audio8 = (function(){
+  let ctx = null;
+  let masterGain = null;
+  let musicGain = null;
+  let sfxGain = null;
+  let muted = false;
+  let musicLoop = null;
+  let musicPattern = null;
+  let currentTrack = null;
+  let noteIndex = 0;
+  let bpm = 140;
+  let initialized = false;
+
+  // Note frequencies (equal temperament, A4=440)
+  const NOTES = {};
+  ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'].forEach((n,i)=>{
+    for(let oct=1; oct<=7; oct++){
+      const freq = 440 * Math.pow(2, (i - 9 + (oct-4)*12) / 12);
+      NOTES[n+oct] = freq;
+    }
+  });
+  // Shortcuts
+  const N = (name) => NOTES[name] || 0;
+
+  function init(){
+    if(initialized) return;
+    try {
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      masterGain = ctx.createGain();
+      masterGain.gain.value = 0.55;
+      masterGain.connect(ctx.destination);
+
+      musicGain = ctx.createGain();
+      musicGain.gain.value = 0.35;
+      musicGain.connect(masterGain);
+
+      sfxGain = ctx.createGain();
+      sfxGain.gain.value = 0.7;
+      sfxGain.connect(masterGain);
+
+      initialized = true;
+    } catch(e){
+      console.warn('Audio init failed:', e);
+    }
+  }
+
+  // Resume context (browsers block audio until user interaction)
+  function resume(){
+    if(!ctx) init();
+    if(ctx && ctx.state === 'suspended'){
+      ctx.resume().catch(()=>{});
+    }
+  }
+
+  // Core beep with ADSR envelope
+  function beep(freq, duration, type='square', volume=0.3, dest=null){
+    if(!initialized || muted || !ctx) return;
+    const osc = ctx.createOscillator();
+    const env = ctx.createGain();
+    osc.type = type;
+    osc.frequency.value = freq;
+
+    const now = ctx.currentTime;
+    env.gain.setValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(volume, now + 0.005);  // attack
+    env.gain.exponentialRampToValueAtTime(0.0001, now + duration);  // decay
+
+    osc.connect(env);
+    env.connect(dest || sfxGain);
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
+  }
+
+  // Beep with frequency sweep
+  function sweep(freqStart, freqEnd, duration, type='square', volume=0.3){
+    if(!initialized || muted || !ctx) return;
+    const osc = ctx.createOscillator();
+    const env = ctx.createGain();
+    osc.type = type;
+    const now = ctx.currentTime;
+    osc.frequency.setValueAtTime(freqStart, now);
+    osc.frequency.exponentialRampToValueAtTime(Math.max(1, freqEnd), now + duration);
+    env.gain.setValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(volume, now + 0.005);
+    env.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    osc.connect(env);
+    env.connect(sfxGain);
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
+  }
+
+  // Noise (for hits/drums) — uses buffer-based white noise
+  function noise(duration, volume=0.25, filter='highpass', filterFreq=1000){
+    if(!initialized || muted || !ctx) return;
+    const bufferSize = ctx.sampleRate * duration;
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for(let i=0; i<bufferSize; i++) data[i] = Math.random()*2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    const filterNode = ctx.createBiquadFilter();
+    filterNode.type = filter;
+    filterNode.frequency.value = filterFreq;
+    const env = ctx.createGain();
+    const now = ctx.currentTime;
+    env.gain.setValueAtTime(volume, now);
+    env.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+    src.connect(filterNode);
+    filterNode.connect(env);
+    env.connect(sfxGain);
+    src.start(now);
+  }
+
+  // ======== SFX ========
+  const SFX = {
+    jump: () => sweep(440, 880, 0.12, 'square', 0.2),
+    doubleJump: () => { sweep(660, 1320, 0.15, 'square', 0.22); setTimeout(()=>beep(1760, 0.08, 'triangle', 0.15), 60); },
+    coin: () => { beep(988, 0.06, 'square', 0.22); setTimeout(()=>beep(1319, 0.12, 'square', 0.25), 55); },
+    powerup: () => {
+      [523, 659, 784, 988, 1319].forEach((f,i)=>setTimeout(()=>beep(f, 0.1, 'square', 0.22), i*60));
+    },
+    hit: () => { noise(0.15, 0.3, 'lowpass', 400); sweep(200, 50, 0.2, 'square', 0.25); },
+    stomp: () => sweep(300, 80, 0.12, 'triangle', 0.3),
+    bossHit: () => { noise(0.25, 0.35, 'highpass', 2000); sweep(400, 100, 0.3, 'sawtooth', 0.3); },
+    bossDefeat: () => {
+      [262, 330, 392, 523, 659, 784, 1047].forEach((f,i)=>setTimeout(()=>beep(f, 0.15, 'square', 0.28), i*80));
+    },
+    levelComplete: () => {
+      // mini jingle: C - E - G - C (high)
+      [N('C5'), N('E5'), N('G5'), N('C6'), N('G5'), N('C6')].forEach((f,i)=>setTimeout(()=>beep(f, 0.15, 'square', 0.3), i*120));
+    },
+    gameOver: () => {
+      [N('E4'), N('D4'), N('C4'), N('B3'), N('A3')].forEach((f,i)=>setTimeout(()=>beep(f, 0.25, 'triangle', 0.28), i*180));
+    },
+    gameWon: () => {
+      // epic CHRO fanfare
+      const mel = [
+        [N('C5'),0.18],[N('E5'),0.18],[N('G5'),0.18],[N('C6'),0.36],
+        [N('G5'),0.18],[N('C6'),0.54],
+        [N('E5'),0.18],[N('G5'),0.18],[N('C6'),0.18],[N('E6'),0.54]
+      ];
+      let t = 0;
+      mel.forEach(([f,d])=>{ setTimeout(()=>beep(f, d, 'square', 0.32), t*1000); setTimeout(()=>beep(f/2, d, 'triangle', 0.18), t*1000); t += d*0.9; });
+    },
+    menuClick: () => beep(880, 0.05, 'square', 0.2),
+    menuHover: () => beep(1320, 0.04, 'square', 0.12)
+  };
+
+  // ======== MUSIC PATTERNS ========
+  // Each pattern: array of [lead_freq, bass_freq] per beat. 0 = rest.
+  // Arpeggio chord patterns + bassline
+  const PATTERNS = {
+    menu: {
+      bpm: 120,
+      lead: [N('A4'),N('C5'),N('E5'),N('A5'), N('A4'),N('C5'),N('E5'),N('G5'), N('F4'),N('A4'),N('C5'),N('F5'), N('E4'),N('G4'),N('B4'),N('E5')],
+      bass: [N('A2'),0,N('A2'),0, N('A2'),0,N('A2'),0, N('F2'),0,N('F2'),0, N('E2'),0,N('E2'),0]
+    },
+    // level 1 — chill upbeat
+    level1: {
+      bpm: 130,
+      lead: [N('C5'),N('E5'),N('G5'),N('C6'), N('G5'),N('E5'),N('C5'),N('G4'), N('F4'),N('A4'),N('C5'),N('F5'), N('E5'),N('C5'),N('G4'),N('E4')],
+      bass: [N('C3'),0,N('G2'),0, N('C3'),0,N('G2'),0, N('F2'),0,N('C3'),0, N('G2'),0,N('C3'),0]
+    },
+    // level 2 — slightly faster
+    level2: {
+      bpm: 140,
+      lead: [N('D5'),N('F5'),N('A5'),N('D6'), N('A5'),N('F5'),N('D5'),N('A4'), N('G4'),N('B4'),N('D5'),N('G5'), N('F5'),N('D5'),N('A4'),N('F4')],
+      bass: [N('D3'),0,N('A2'),0, N('D3'),0,N('A2'),0, N('G2'),0,N('D3'),0, N('A2'),0,N('D3'),0]
+    },
+    // level 3 — more energy
+    level3: {
+      bpm: 148,
+      lead: [N('E5'),N('G5'),N('B5'),N('E6'), N('B5'),N('G5'),N('E5'),N('B4'), N('A4'),N('C5'),N('E5'),N('A5'), N('G5'),N('E5'),N('B4'),N('G4')],
+      bass: [N('E3'),0,N('B2'),0, N('E3'),0,N('B2'),0, N('A2'),0,N('E3'),0, N('B2'),0,N('E3'),0]
+    },
+    // level 4 — tense
+    level4: {
+      bpm: 156,
+      lead: [N('F4'),N('A4'),N('C5'),N('F5'), N('E5'),N('C5'),N('A4'),N('F4'), N('G4'),N('B4'),N('D5'),N('G5'), N('F5'),N('D5'),N('B4'),N('G4')],
+      bass: [N('F2'),N('F2'),N('C3'),N('C3'), N('F2'),N('F2'),N('C3'),N('C3'), N('G2'),N('G2'),N('D3'),N('D3'), N('G2'),N('G2'),N('D3'),N('D3')]
+    },
+    // level 5 — strategic high-stakes
+    level5: {
+      bpm: 162,
+      lead: [N('A4'),N('C5'),N('E5'),N('A5'), N('G5'),N('E5'),N('C5'),N('A4'), N('F4'),N('A4'),N('D5'),N('F5'), N('E5'),N('C5'),N('A4'),N('F4')],
+      bass: [N('A2'),N('A2'),N('E3'),N('E3'), N('A2'),N('A2'),N('E3'),N('E3'), N('F2'),N('F2'),N('D3'),N('D3'), N('F2'),N('F2'),N('D3'),N('D3')]
+    },
+    // level 6 — EPIC CHRO climb
+    level6: {
+      bpm: 168,
+      lead: [N('C5'),N('E5'),N('G5'),N('C6'), N('E6'),N('C6'),N('G5'),N('E5'), N('F5'),N('A5'),N('C6'),N('F6'), N('E6'),N('C6'),N('A5'),N('F5')],
+      bass: [N('C3'),N('G2'),N('C3'),N('G2'), N('C3'),N('G2'),N('C3'),N('G2'), N('F2'),N('C3'),N('F2'),N('C3'), N('F2'),N('C3'),N('F2'),N('C3')]
+    },
+    // boss fight — tense stab pattern
+    boss: {
+      bpm: 170,
+      lead: [N('E4'),N('E4'),N('G4'),N('E4'), N('E4'),N('E4'),N('A4'),N('E4'), N('D4'),N('D4'),N('F4'),N('D4'), N('D4'),N('D4'),N('G4'),N('D4')],
+      bass: [N('E2'),N('E2'),N('E2'),N('E2'), N('E2'),N('E2'),N('E2'),N('E2'), N('D2'),N('D2'),N('D2'),N('D2'), N('D2'),N('D2'),N('D2'),N('D2')]
+    }
+  };
+
+  function playMusic(trackName){
+    if(!initialized) return;
+    if(currentTrack === trackName) return;  // already playing
+    stopMusic();
+    const pat = PATTERNS[trackName];
+    if(!pat) return;
+    currentTrack = trackName;
+    musicPattern = pat;
+    noteIndex = 0;
+    const beatDuration = 60000 / pat.bpm / 2;  // 16th notes
+    musicLoop = setInterval(()=>{
+      if(muted || !ctx) return;
+      const leadF = pat.lead[noteIndex % pat.lead.length];
+      const bassF = pat.bass[noteIndex % pat.bass.length];
+      if(leadF > 0){
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.type = 'square';
+        osc.frequency.value = leadF;
+        const now = ctx.currentTime;
+        env.gain.setValueAtTime(0, now);
+        env.gain.linearRampToValueAtTime(0.15, now + 0.005);
+        env.gain.exponentialRampToValueAtTime(0.0001, now + beatDuration/1000 * 0.9);
+        osc.connect(env);
+        env.connect(musicGain);
+        osc.start(now);
+        osc.stop(now + beatDuration/1000);
+      }
+      if(bassF > 0){
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = bassF;
+        const now = ctx.currentTime;
+        env.gain.setValueAtTime(0, now);
+        env.gain.linearRampToValueAtTime(0.25, now + 0.005);
+        env.gain.exponentialRampToValueAtTime(0.0001, now + beatDuration/1000 * 1.8);
+        osc.connect(env);
+        env.connect(musicGain);
+        osc.start(now);
+        osc.stop(now + beatDuration/1000 * 2);
+      }
+      noteIndex++;
+    }, beatDuration);
+  }
+
+  function stopMusic(){
+    if(musicLoop){
+      clearInterval(musicLoop);
+      musicLoop = null;
+    }
+    currentTrack = null;
+  }
+
+  function setMuted(m){
+    muted = m;
+    if(masterGain && ctx) masterGain.gain.value = m ? 0 : 0.55;
+    try { sessionStorage.setItem('hrrun_muted', m ? '1' : '0'); } catch(e){}
+  }
+
+  function isMuted(){ return muted; }
+
+  // Restore mute state
+  try {
+    const saved = sessionStorage.getItem('hrrun_muted');
+    if(saved === '1') muted = true;
+  } catch(e){}
+
+  return { init, resume, SFX, playMusic, stopMusic, setMuted, isMuted };
+})();
+
+// Mute button wiring
+function updateMuteButton(){
+  const btn = document.getElementById('mute-btn');
+  const icon = document.getElementById('mute-icon');
+  if(!btn) return;
+  if(Audio8.isMuted()){
+    btn.classList.add('muted');
+    icon.textContent = '🔇';
+  } else {
+    btn.classList.remove('muted');
+    icon.textContent = '🔊';
+  }
+}
 
 // ==================================================================
 // INPUT SYSTEM
@@ -754,6 +1117,7 @@ function showScreen(id){
 
 function startGame(){
   game = createGame();
+  track('game_started', { timestamp: Date.now() });
   loadLevel(0);
 }
 
@@ -769,11 +1133,19 @@ function loadLevel(idx){
 
 function beginLevelPlay(){
   game.currentLevel = createLevel(game.levelIdx);
+  track('level_started', {
+    level: game.levelIdx + 1,
+    grade: LEVELS[game.levelIdx].grade,
+    role: LEVELS[game.levelIdx].role
+  });
   showScreen(null);
   document.getElementById('hud').classList.add('active');
   if(isMobile) document.getElementById('mobile-controls').classList.add('active');
   running = true;
   renderHUD();
+  // Start level music
+  Audio8.resume();
+  Audio8.playMusic('level' + (game.levelIdx + 1));
 }
 
 function finishLevel(success){
@@ -783,6 +1155,14 @@ function finishLevel(success){
   const L = game.currentLevel;
 
   if(!success){
+    track('level_failed', {
+      level: game.levelIdx + 1,
+      grade: LEVELS[game.levelIdx].grade,
+      role: LEVELS[game.levelIdx].role,
+      coins_this_level: L.coins.filter(c=>c.collected).length
+    });
+    Audio8.stopMusic();
+    Audio8.SFX.gameOver();
     document.getElementById('go-role').textContent = LEVELS[game.levelIdx].role;
     document.getElementById('go-coins').textContent = game.totalCoins;
     showScreen('game-over');
@@ -801,10 +1181,26 @@ function finishLevel(success){
     }
   });
 
+  track('level_completed', {
+    level: game.levelIdx + 1,
+    grade: LEVELS[game.levelIdx].grade,
+    role: LEVELS[game.levelIdx].role,
+    coins_collected: collected,
+    coins_total: totalThisLevel,
+    hp_remaining: L.player.hp
+  });
+
   if(game.levelIdx >= LEVELS.length - 1){
     // GAME WON!
-    document.getElementById('gw-total-coins').textContent = game.totalCoins;
     const elapsed = Math.floor((Date.now() - game.startTime)/1000);
+    track('game_won', {
+      total_coins: game.totalCoins,
+      total_time_seconds: elapsed,
+      total_competencies: game.totalCompetencies.length
+    });
+    Audio8.stopMusic();
+    setTimeout(()=>Audio8.SFX.gameWon(), 300);
+    document.getElementById('gw-total-coins').textContent = game.totalCoins;
     const mm = String(Math.floor(elapsed/60)).padStart(2,'0');
     const ss = String(elapsed%60).padStart(2,'0');
     document.getElementById('gw-time').textContent = `${mm}:${ss}`;
@@ -813,6 +1209,8 @@ function finishLevel(success){
   }
 
   // Show level complete screen
+  Audio8.stopMusic();
+  Audio8.SFX.levelComplete();
   document.getElementById('lc-sub').innerHTML = `
     ${LEVELS[game.levelIdx].role}<br>→ <em>${LEVELS[game.levelIdx].nextRole}</em>
   `;
@@ -879,10 +1277,12 @@ function update(dt){
       p.onGround = false;
       p.didDoubleJump = false;
       spawnParticles(L, p.x+p.w/2, p.y+p.h, 6, '#fff', -1);
+      Audio8.SFX.jump();
     } else if(p.canDoubleJump && !p.didDoubleJump){
       p.vy = JUMP_VEL * 0.85;
       p.didDoubleJump = true;
       spawnParticles(L, p.x+p.w/2, p.y+p.h, 10, '#39ff9a', -1);
+      Audio8.SFX.doubleJump();
     }
     jumpPressed = false;
   }
@@ -950,6 +1350,7 @@ function update(dt){
       c.collected = true;
       showFloater(`+1 ${c.comp}`, c.x - L.scrollX, c.y, '#ffd92b');
       spawnParticles(L, c.x+c.w/2, c.y+c.h/2, 10, '#ffd92b', 0);
+      Audio8.SFX.coin();
       renderHUD();
     }
   }
@@ -962,6 +1363,7 @@ function update(dt){
       pu.collected = true;
       activatePowerUp(L, pu.type);
       spawnParticles(L, pu.x+pu.w/2, pu.y+pu.h/2, 20, powerUpColor(pu.type), 0);
+      Audio8.SFX.powerup();
     }
   }
 
@@ -988,6 +1390,7 @@ function update(dt){
         p.vy = JUMP_VEL * 0.75;
         showFloater(`DEFEATED`, e.x - L.scrollX, e.y, '#39ff9a');
         spawnParticles(L, e.x+e.w/2, e.y+e.h/2, 15, '#ff2d95', 0);
+        Audio8.SFX.stomp();
       } else {
         hurtPlayer(L, 1);
         // knockback
@@ -1052,6 +1455,12 @@ function updateBoss(L, dt){
   const distToBoss = Math.abs(p.x - b.x);
   if(distToBoss > 600) return;
 
+  // Switch to boss music when close
+  if(distToBoss < 500 && !L._bossMusicOn){
+    L._bossMusicOn = true;
+    Audio8.playMusic('boss');
+  }
+
   if(b.state === 'approach'){
     // Patrols in its arena
     b.x += b.vx;
@@ -1079,12 +1488,17 @@ function updateBoss(L, dt){
       p.vy = JUMP_VEL * 0.9;
       showFloater(`-1 HP`, b.x - L.scrollX + 30, b.y, '#ff2d95');
       spawnParticles(L, b.x+b.w/2, b.y, 20, '#ff2d95', 0);
+      Audio8.SFX.bossHit();
       if(b.hp <= 0){
         b.alive = false;
         L.bossDefeated = true;
         showFloater(`BOSS DEFEATED!`, b.x - L.scrollX, b.y - 20, '#39ff9a');
         spawnParticles(L, b.x+b.w/2, b.y+b.h/2, 50, '#39ff9a', 0);
         L.shake = 20;
+        Audio8.SFX.bossDefeat();
+        // Switch back to level music after boss defeat
+        const lvlIdx = game.levelIdx;
+        Audio8.playMusic('level' + (lvlIdx + 1));
       }
     } else {
       hurtPlayer(L, 1);
@@ -1102,6 +1516,7 @@ function hurtPlayer(L, dmg){
   renderHUD();
   spawnParticles(L, p.x+p.w/2, p.y+p.h/2, 15, '#ff2d95', 0);
   L.shake = 10;
+  Audio8.SFX.hit();
   if(p.hp <= 0){
     finishLevel(false);
   }
@@ -1834,22 +2249,32 @@ function drawStar(cx, cy, spikes, outerR, innerR){
 // EVENT HANDLERS
 // ==================================================================
 document.getElementById('start-game-btn').addEventListener('click', ()=>{
+  Audio8.init();
+  Audio8.resume();
+  Audio8.SFX.menuClick();
   startGame();
 });
 document.getElementById('go-btn').addEventListener('click', ()=>{
+  Audio8.SFX.menuClick();
   beginLevelPlay();
 });
 document.getElementById('lc-next').addEventListener('click', ()=>{
+  Audio8.SFX.menuClick();
   loadLevel(game.levelIdx + 1);
 });
 document.getElementById('go-retry').addEventListener('click', ()=>{
+  Audio8.SFX.menuClick();
   loadLevel(game.levelIdx);
 });
 document.getElementById('go-menu').addEventListener('click', ()=>{
+  Audio8.SFX.menuClick();
+  Audio8.stopMusic();
   game = null;
   showScreen('intro');
 });
 document.getElementById('gw-menu').addEventListener('click', ()=>{
+  Audio8.SFX.menuClick();
+  Audio8.stopMusic();
   game = null;
   showScreen('intro');
 });
@@ -1858,12 +2283,32 @@ document.getElementById('gw-share').addEventListener('click', ()=>{
   const mm = String(Math.floor(elapsed/60)).padStart(2,'0');
   const ss = String(elapsed%60).padStart(2,'0');
   const text = `Я прошёл HR Career Run от Mike Pritula Academy.\nОт HR-ассистента до CHRO за ${mm}:${ss}.\nСобрано ${game.totalCoins} компетенций.\n\npritula.academy`;
+  track('share_clicked', { total_coins: game.totalCoins, time_seconds: elapsed });
   if(navigator.share){
     navigator.share({title:'HR Career Run', text}).catch(()=>{});
   } else {
     navigator.clipboard.writeText(text).then(()=>alert('Результат скопирован'));
   }
 });
+
+// Mute button
+document.getElementById('mute-btn').addEventListener('click', ()=>{
+  Audio8.init();
+  Audio8.setMuted(!Audio8.isMuted());
+  updateMuteButton();
+});
+
+// M key toggles mute
+window.addEventListener('keydown', e => {
+  if(e.code === 'KeyM' && !e.repeat){
+    Audio8.init();
+    Audio8.setMuted(!Audio8.isMuted());
+    updateMuteButton();
+  }
+});
+
+// Initial mute state from storage
+updateMuteButton();
 
 // Start the render loop
 requestAnimationFrame(loop);
